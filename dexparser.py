@@ -22,15 +22,54 @@ class SHA1HashError(DexParserError):
     """Thrown when the dex file's SHA1 hash is invalid."""
 
 
+class ULEB128ParseError(DexParserError):
+    """Thrown when there is a parser issue of a ULEB128 encoded number."""
+
+
+def get_uleb128(data):
+    value = 0
+    for i in range(5):
+        tmp = data[i] & 0x7f
+        value = tmp << (i * 7) | value
+
+        if (data[i] & 0x80) != 0x80:
+            break
+
+    if i == 4 and (tmp & 0xf0) != 0:
+        raise ULEB128ParseError()
+
+    return i + 1, value
+
+
+def fill_string_ids(content, string_ids_off, string_ids_size):
+    if not string_ids_size:
+        return
+    string_ids = list()
+    offset, *_ = struct.unpack('<L', content[string_ids_off:string_ids_off+4])
+    start = offset
+    for i in range(1, string_ids_size):
+        offset, *_ = struct.unpack_from(
+            'I',
+            content,
+            string_ids_off + i * 4
+        )
+        skip, length = get_uleb128(content[start:start + 5])
+        string_ids.append(content[start+skip:offset-1])
+        start = offset
+    for i in range(start, len(content)):
+        if content[i] == 0:
+            string_ids.append(content[start+1:i])
+            break
+    return string_ids
+
 def check_dex_file(dex_file):
-    magic = dex_file.read(8)
+    content = dex_file.read()
+    magic = content[:8]
     if magic != MAGIC_WORD:
         raise NotADexFile()
 
-    checksum = dex_file.read(4)
-    sha1 = dex_file.read(20)
-
-    content = dex_file.read()
+    checksum = content[8:8+4]
+    sha1 = content[12:12+20]
 
     (
         file_size,
@@ -53,16 +92,16 @@ def check_dex_file(dex_file):
         class_defs_off,
         data_size,
         data_off,
-    ) = struct.unpack(f"<{'L'*20}", content[: 4 * 20])
+    ) = struct.unpack(f"<{'L'*20}", content[32:112])
 
-    adler32_checksum = zlib.adler32(sha1 + content)
+    adler32_checksum = zlib.adler32(sha1 + content[32:])
     if adler32_checksum != struct.unpack("<L", checksum)[0]:
         raise ChecksumError()
 
     print(f"[+] Adler32 Checksum: {hex(adler32_checksum)}")
 
     hasher = hashlib.sha1()
-    hasher.update(content)
+    hasher.update(content[32:])
 
     if hasher.digest() != sha1:
         raise SHA1HashError()
@@ -88,6 +127,8 @@ def check_dex_file(dex_file):
     print(f"[+] Class defs offset: {hex(class_defs_off)}")
     print(f"[+] Data size: {data_size}")
     print(f"[+] Data offset: {hex(data_off)}")
+
+    fill_string_ids(content, string_ids_off, string_ids_size)
 
 
 def main(argv):
