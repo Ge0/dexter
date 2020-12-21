@@ -41,7 +41,7 @@ def get_uleb128(data):
     return i + 1, value
 
 
-def fill_string_ids(content, string_ids_off, string_ids_size):
+def get_string_ids(content, string_ids_off, string_ids_size):
     if not string_ids_size:
         return
     string_ids = list()
@@ -61,6 +61,66 @@ def fill_string_ids(content, string_ids_off, string_ids_size):
             string_ids.append(content[start+1:i])
             break
     return string_ids
+
+
+def get_type_values(content, ids_off, ids_size, string_ids):
+    values = list()
+    for i in range(ids_size):
+        values.append(
+            string_ids[
+                struct.unpack_from('I', content, ids_off + i * 4)[0]
+            ]
+        )
+    return values
+
+
+def get_proto_values(content, ids_off, ids_size, string_ids, type_ids):
+    values = list()
+    for i in range(ids_size):
+        shorty, return_type, parameters_off = \
+            struct.unpack_from('<IIL', content, ids_off + i * 12)
+        
+        string_shorty = string_ids[shorty]
+        string_type_ids = type_ids[return_type]
+        
+        string_parameters = list()
+        if parameters_off != 0:
+            types_count, *_ = struct.unpack_from('<L', content, parameters_off)
+            for j in range(types_count):
+                string_parameters.append(
+                    type_ids[content[parameters_off + 4 + j * 4]]
+                )
+        
+        values.append(
+            (
+                string_shorty,
+                string_type_ids,
+                string_parameters
+            )
+        )
+    return values
+
+
+def get_method_values(
+    content,
+    methods_off,
+    methods_size,
+    string_ids,
+    type_ids,
+    proto_ids
+):
+    methods = list()
+    for i in range(methods_size):
+        class_idx, proto_idx, name_idx = struct.unpack_from(
+            'HHI',
+            content,
+            methods_off + i * 8
+        )
+        methods.append(
+            (type_ids[class_idx], proto_ids[proto_idx], string_ids[name_idx])
+        )
+    return methods
+
 
 def check_dex_file(dex_file):
     content = dex_file.read()
@@ -128,7 +188,28 @@ def check_dex_file(dex_file):
     print(f"[+] Data size: {data_size}")
     print(f"[+] Data offset: {hex(data_off)}")
 
-    fill_string_ids(content, string_ids_off, string_ids_size)
+    string_ids = get_string_ids(content, string_ids_off, string_ids_size)
+    type_ids = get_type_values(
+        content,
+        type_ids_off,
+        type_ids_size,
+        string_ids
+    )
+    proto_ids = get_proto_values(
+        content,
+        proto_ids_off,
+        proto_ids_size,
+        string_ids,
+        type_ids
+    )
+    method_ids = get_method_values(
+        content,
+        method_ids_off,
+        method_ids_size,
+        string_ids,
+        type_ids,
+        proto_ids
+    )
 
 
 def main(argv):
